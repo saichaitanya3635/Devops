@@ -22,3 +22,11 @@ git log
 git log --oneline 
 
 git show "particular commit-id"
+
+git branch "new branchname" 
+
+git checkout <branch-name> 
+
+git fetch -all------------------fetches the changes and new branches 
+
+git branch -r ------------------show the all remote branches 
