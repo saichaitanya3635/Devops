@@ -1,0 +1,24 @@
+git config --global --list 
+
+git config --global user.name <username>
+
+git config --global user.email <emailid>
+
+git status 
+
+
+git add .
+
+git commit -m "commit meesage"
+
+git push origin 
+
+check for remote details --------------   git remote -v 
+
+git pull--------------------pull the latest changes 
+
+git log 
+
+git log --oneline 
+
+git show "particular commit-id"
