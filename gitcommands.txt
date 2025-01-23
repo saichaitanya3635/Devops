@@ -31,10 +31,7 @@ git branch -d <branch-name>-----------------------------delete the branch
 
 git push delete origin <branch-name>---------------------deleteing the remote branch after deleting local branch 
 
-<<<<<<< Updated upstream
 git branch | grep -v "main" | xargs git branch -D
-=======
-
 
 chandu
->>>>>>> Stashed changes
+
