@@ -30,3 +30,5 @@ git branch ----------------------------------check for local branches
 git branch -d <branch-name>-----------------------------delete the branch 
 
 git push delete origin <branch-name>---------------------deleteing the remote branch after deleting local branch 
+
+git branch | grep -v "main" | xargs git branch -D
