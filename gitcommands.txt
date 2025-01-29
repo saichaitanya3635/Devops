@@ -33,6 +33,40 @@ git push delete origin <branch-name>---------------------deleteing the remote br
 
 git branch | grep -v "main" | xargs git branch -D
 
-chandu
+git branch | grep -v "main" | xargs git branch -D
 
-charan
+git remote prune origin
+
+git push origin --delete <branch_name>
+
+git reset --soft HEAD~1
+
+git reset --hard <commit_hash>
+
+git merge --abort
+
+git stash
+
+git pull
+
+git stash pop
+
+git stash drop
+
+git clean -f - remove new files which are created 
+
+git clean -fd - remove new directory 
+
+git checkout -- <filename.txt> -- if u want to undo the changes for the file which is alreday in remote 
+
+git log main origin/main -- if any new file is added but when u use git fetch it will not show new file for this we need to use this command
+
+git merge -after using this u will get to know the remote changes . then we need to use 
+
+
+
+
+
+
+
+
