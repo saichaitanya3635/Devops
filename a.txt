@@ -1,0 +1,47 @@
+import yaml
+import re
+
+def parse_jenkinsfile(jenkinsfile_path):
+    pipeline_structure = {"stages": []}
+    
+    with open(jenkinsfile_path, "r") as file:
+        lines = file.readlines()
+
+    stage_pattern = re.compile(r'stage\("([^"]+)"\)\s*\{')
+    step_pattern = re.compile(r'(\w+)\s*\{')
+    command_pattern = re.compile(r'^\s*sh\s+["\']([^"\']+)["\']')
+
+    current_stage = None
+    current_steps = []
+
+    for line in lines:
+        stage_match = stage_pattern.search(line)
+        step_match = step_pattern.search(line)
+        command_match = command_pattern.search(line)
+
+        if stage_match:
+            if current_stage:
+                pipeline_structure["stages"].append({"name": current_stage, "steps": current_steps})
+                current_steps = []
+            current_stage = stage_match.group(1)
+
+        elif command_match:
+            current_steps.append({"run": command_match.group(1)})
+
+    if current_stage:
+        pipeline_structure["stages"].append({"name": current_stage, "steps": current_steps})
+
+    return pipeline_structure
+
+
+def convert_to_yaml(jenkinsfile_path, output_yaml_path):
+    pipeline_data = parse_jenkinsfile(jenkinsfile_path)
+    
+    with open(output_yaml_path, "w") as yaml_file:
+        yaml.dump(pipeline_data, yaml_file, default_flow_style=False, sort_keys=False)
+
+    print(f"YAML file saved at: {output_yaml_path}")
+
+
+# Example Usage
+convert_to_yaml("Jenkinsfile", "pipeline.yml")
