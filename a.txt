@@ -1,1 +1,335 @@
-The import org.yaml cannot be resolvedJava(268435846)
+pipeline {
+    agent {
+        label 'image_bullseye_0002 && !delete'
+    }
+    environment {
+        PYTHON = "C:\\Python37\\python.exe"
+        oraVersion = "19c"
+        dbDriverName = "Oracle in Ora19c"
+    }
+    options {
+        timeout(time: 1, unit: 'HOURS')
+        timestamps()
+    }
+    parameters {
+        booleanParam(name: 'deploy', defaultValue: true, description: '')
+        booleanParam(name: 'runCoverity', defaultValue: false, description: 'Run code analysis and send results to Coverity')
+        string(name: 'Credential', defaultValue: "2648edc2-b639-4569-86b1-5d8d0743c73f", description: 'Credential for making Release')
+        booleanParam(name: 'artifactoryUpload', defaultValue: false, description: 'Upload artifacts to Artifactory')
+        booleanParam(name: 'runBlackDuckScan', defaultValue: false, description: 'BlackDuck Hub Scan')
+        string(name: 'version', defaultValue: "", description: 'MAJOR.MINOR.MAINT.PATCH version of the release you want to create, for example "1.0.0.0".')
+        string(name: 'blackduckversion', defaultValue: "", description: 'Release version in Blackduck Hub for Scan, for example "3.0.0.0".')
+        booleanParam(name: 'patchRelease', defaultValue: false, description: '')
+        booleanParam(name: 'maintenanceRelease', defaultValue: false, description: '')
+    }
+    stages {
+        stage('Checkout') {
+            steps {
+                deleteDir()
+                script {
+                    currentBuild.description = "Agent: ${env.NODE_NAME}"
+                }
+                bat 'md artifacts'
+                dir('artifacts') {
+                    bat 'md Connexo_NetSense_PushReceiver_Unzip'
+                }
+                checkout scm
+                script {
+                    setBuildVersion()
+                }
+                echo "Get scripts to sign powershell scripts"
+                checkout changelog: false, poll: false, scm: [
+                    $class: 'GitSCM',
+                    branches: [[name: '*/master']],
+                    extensions: [[$class: 'RelativeTargetDirectory', relativeTargetDir: 'common']],
+                    userRemoteConfigs: [[credentialsId: 'gnSmartEnergy-PAT-GitHub', url: 'https://github.com/HON-IA/code-signing.git']]
+                ]
+            }
+        }
+        stage('DB Reset') {
+            steps {
+                timeout(time: 20, unit: 'MINUTES') {
+                    withEnv(["ORACLE_HOME=${env.ORACLE_BASE}\\product\\${oraVersion}", "PATH+ORACLE=${env.ORACLE_CLIENT_DIR}"]) {
+                        bat "${env.WORKSPACE}//RecreatePDB.bat > artifacts/RecreatePDB.txt 2>&1"
+                        dir('database') {
+                            bat "RunUpgrade.bat sys/syselster@NTSNSPDB"
+                        }
+                    }
+                }
+            }
+        }
+        stage('Build') {
+            steps {
+                script {
+                    def hostname = getCommandOutput("hostname")
+                    timeout(time: 10, unit: 'MINUTES') {
+                        describeStr = baseGit.gitDescribe()
+                        baseJenkins.updatePythonVersionFile("version.txt", describeStr)
+                        withPythonEnv("python") {
+                            withEnv([
+                                "ORACLE_HOME=${env.ORACLE_BASE}\\product\\${oraVersion}",
+                                "PATH+ORACLE=${env.ORACLE_CLIENT_DIR}",
+                                "EAMS_CORE_COMMUSER_CONN=DRIVER={Oracle in Ora${oraVersion}};DBQ=${hostname}/${env.DBNAME};UID=commuser;PWD=commuser",
+                                "EAMS_CORE_PUSHRCVR_CONN=DRIVER={Oracle in Ora${oraVersion}};DBQ=${hostname}/${env.DBNAME};UID=pushrcvr;PWD=pushrcvr"
+                            ]) {
+                                bat "python -m pip install --upgrade pip"
+                                bat "pip uninstall -y virtualenv"
+                                bat "pip install virtualenv==16.1.0"
+                                bat "set"
+                                bat "pip install -r requirements.txt"
+                                bat "pip install -r requirements-internal.txt"
+                                bat "coverage erase"
+                                bat "pytest --junitxml=artifacts\\junit.xml --cov=pushreceiver --cov-report=html --cov-branch --pyargs pushreceiver"
+                                if (shouldRunCoverity()) {
+                                    bat "\"C:\\Program Files\\Coverity\\Coverity Static Analysis\\bin\\cov-configure.exe\" --python"
+                                    bat "\"C:\\Program Files\\Coverity\\Coverity Static Analysis\\bin\\cov-build.exe\" --dir idir --no-command --fs-capture-search pushreceiver"
+                                    bat "\"C:\\Program Files\\Coverity\\Coverity Static Analysis\\bin\\cov-import-scm.exe\" --dir idir --scm git"
+                                    bat "\"C:\\Program Files\\Coverity\\Coverity Static Analysis\\bin\\cov-analyze.exe\" --dir idir --strip-path ${env.WORKSPACE} --fb-max-mem 2048 @@\"${env.ORACLE_DRIVE}\\checker_response_file.txt\""
+                                    bat "\"C:\\Program Files\\Coverity\\Coverity Static Analysis\\bin\\cov-format-errors.exe\" --dir idir --html-output artifacts\\cov-results"
+                                }
+                                bat "pyinstaller -F pushreceiver\\WinService.py -n pushreceiver --version-file=version.txt --hidden-import=win32timezone"
+                                if (env.BRANCH_NAME.startsWith("master")) {
+                                    bat "\"C:\\Program Files\\Coverity\\Coverity Static Analysis\\bin\\cov-commit-defects.exe\" --dir idir --user \"pmt-hps-sme-netsense-sa\" --password FhmVy1Nc4B8Y50cDqi7Y2 --url https://coverity.swtools.honeywell.com --stream PMT-HPS-SME-NETSENSE-PUSHRECEIVER-MASTER --noxrefs"
+                                }
+                                bat "common\\sign.bat dist\\pushreceiver.exe"
+                                bat "common\\sign.bat installer\\*.ps1"
+                                bat "common\\sign.bat installer\\*.psm1"
+                                bat returnStatus: false, script: "powershell -f installer\\CreateInstaller.ps1"
+                                if (shouldRunBlackDuckScan()) {
+                                    if (env.BRANCH_NAME.startsWith("master")) {
+                                        dir("${env.WORKSPACE}") {
+                                            bat "java -jar ${env.ORACLE_DRIVE}\\synopsys-detect-6.5.0.jar --blackduck.url=https://blackduck.swtools.honeywell.com --blackduck.api.token=ZTUwMTUwN2UtZTJjZC00YzVkLWFkMWYtYmQ1OWM3OGI2ZjliOjUwNjAxMmZlLTRhODMtNDM2OC1hZGMyLWEyOWY4MjViNDVlNA== --blackduck.trust.cert=true --detect.project.name=\"NTSNS - NetSense PushReceiver\" --detect.project.version.name=master detect.clone.project.version.latest=true --logging.level.com.synopsys.integration=INFO --detect.code.location.name=NetSensePushReceiver-master --detect.tools=BINARY_SCAN --detect.binary.scan.file.path=\"${env.WORKSPACE}\\installer\\artifacts\\Connexo_NetSense_PushReceiver_Installer.zip\""
+                                        }
+                                    } else if (env.BRANCH_NAME.startsWith("release")) {
+                                        dir("${env.WORKSPACE}") {
+                                            bat "java -jar ${env.ORACLE_DRIVE}\\synopsys-detect-6.5.0.jar --blackduck.url=https://blackduck.swtools.honeywell.com --blackduck.api.token=ZTUwMTUwN2UtZTJjZC00YzVkLWFkMWYtYmQ1OWM3OGI2ZjliOjUwNjAxMmZlLTRhODMtNDM2OC1hZGMyLWEyOWY4MjViNDVlNA== --blackduck.trust.cert=true --detect.project.name=\"NTSNS - NetSense PushReceiver\" --detect.project.version.name=\"${params.blackduckversion}\" detect.clone.project.version.latest=true --logging.level.com.synopsys.integration=INFO --detect.code.location.name=\"NetSensePushReceiver-release-${params.blackduckversion}\" --detect.tools=BINARY_SCAN --detect.binary.scan.file.path=\"${env.WORKSPACE}\\installer\\artifacts\\Connexo_NetSense_PushReceiver_Installer.zip\""
+                                        }
+                                    } else {
+                                        echo "BlackDuck Hub Scan is not selected by user."
+                                    }
+                                }
+                                bat "rmdir \"${env.WORKSPACE}\\installer\\build\" /s /q"
+                                bat "copy ${env.WORKSPACE}\\installer\\artifacts\\Connexo_NetSense_PushReceiver_Installer.zip ${env.WORKSPACE}\\artifacts"
+                                bat "copy ${env.WORKSPACE}\\installer\\artifacts\\Connexo_NetSense_PushReceiver_Installer.cat ${env.WORKSPACE}\\artifacts"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        stage('Artifactory Upload') {
+            when {
+                expression { shouldUploadtoArtifactory() }
+            }
+            steps {
+                timeout(time: 20, unit: 'MINUTES') {
+                    script {
+                        def ART_BRANCH = getBranchName()
+                        def STABLE_FOLDER = "netsense-artifacts-generic-stable-local/netsense-core-pushreceiver/${ART_BRANCH}/${env.BUILD_NUMBER}"
+                        def UNSTABLE_FOLDER = "netsense-artifacts-generic-unstable-local/netsense-core-pushreceiver/${ART_BRANCH}/${env.BUILD_NUMBER}"
+                        def ARTIFACTORY_FOLDER = UNSTABLE_FOLDER
+                        if (env.BRANCH_NAME.startsWith("master") || env.BRANCH_NAME.startsWith("release")) {
+                            ARTIFACTORY_FOLDER = STABLE_FOLDER
+                        }
+                        echo "Sending artifacts to Artifactory ${ARTIFACTORY_FOLDER}"
+                        def uploadSpec = """{
+                            "files": [
+                                {
+                                    "pattern": "${env.WORKSPACE}/artifacts/*.zip",
+                                    "target": "${ARTIFACTORY_FOLDER}/",
+                                    "flat": true
+                                },
+                                {
+                                    "pattern": "${env.WORKSPACE}/artifacts/*.cat",
+                                    "target": "${ARTIFACTORY_FOLDER}/",
+                                    "flat": true
+                                }
+                            ]
+                        }"""
+                        def artserver = Artifactory.server 'Artifactory'
+                        artserver.upload spec: uploadSpec, failNoOp: true
+                    }
+                }
+            }
+        }
+        stage('Deploy') {
+            when {
+                expression { shouldDeploy() }
+            }
+            steps {
+                timeout(time: 20, unit: 'MINUTES') {
+                    dir('${env.ORACLE_DRIVE}\\EE\\PushReceiver') {
+                        deleteDir()
+                    }
+                    bat 'md ${env.ORACLE_DRIVE}\\EE\\PushReceiver'
+                    echo 'Start Install'
+                    withEnv(["ORACLE_HOME=${env.ORACLE_BASE}\\product\\${oraVersion}", "PATH+ORACLE=${env.ORACLE_CLIENT_DIR}"]) {
+                        bat "${env.WORKSPACE}\\RecreatePDB.bat > artifacts\\Deploy_RecreatePDB.txt 2>&1"
+                    }
+                    bat "${env.WORKSPACE}\\tools\\7z.exe e ${env.WORKSPACE}\\artifacts\\Connexo_NetSense_PushReceiver_Installer.zip -o${env.WORKSPACE}\\artifacts\\Connexo_NetSense_PushReceiver_Unzip"
+                    bat(returnStatus: true, script: "powershell -f artifacts\\Connexo_NetSense_PushReceiver_Unzip\\UninstallNetSensePushReceiver.ps1 -InstallDir ${env.ORACLE_DRIVE}\\EE\\PushReceiver > ${env.WORKSPACE}/artifacts/Deploy_cleanup_log.txt 2>&1")
+                    script {
+                        def status = null
+                        def powershellScript = "powershell -f artifacts\\Connexo_NetSense_PushReceiver_Unzip\\InstallNetSensePushReceiver.ps1"
+                        def powershellParameters = "-InstallDir ${env.ORACLE_DRIVE}\\EE\\PushReceiver -Silent -StartServices"
+                        def powershellDBParams = "-DBHost ${env.COMPUTERNAME} -DBService ${env.DBNAME} -DBCommUsername pushrcvr -DBCommPassword pushrcvr -DBSysUsername sys -DBSysPassword syselster"
+                        echo 'Installing Push Receiver'
+                        def powerShellCommand = "${powershellScript} ${powershellParameters} ${powershellDBParams}"
+                        echo "powerShellCommand = ${powerShellCommand}"
+                        status = bat(returnStatus: true, script: "${powerShellCommand} > artifacts\\Deploy_install_log.txt 2>&1")
+                        if (status != 0) {
+                            error('Could not Install Push Receiver')
+                        }
+                        echo 'Test service'
+                        status = bat(returnStatus: true, script: "sc.exe query netSense_pushreceiver | findstr RUNNING > artifacts/Deploy_check_service_log.txt 2>&1")
+                        if (status != 0) {
+                            error('Push Receiver Service is not running')
+                        }
+                        echo 'Start Uninstall'
+                        status = bat(returnStatus: true, script: "powershell -f artifacts\\Connexo_NetSense_PushReceiver_Unzip\\UninstallNetSensePushReceiver.ps1 -InstallDir ${env.ORACLE_DRIVE}\\EE\\PushReceiver > ${env.WORKSPACE}\\artifacts\\Deploy_uninstall_log.txt 2>&1")
+                        if (status != 0) {
+                            error('Could not Uninstall Push Receiver')
+                        }
+                    }
+                }
+            }
+        }
+    }
+    post {
+        always {
+            archiveArtifacts artifacts: 'artifacts/*.*', allowEmptyArchive: true, fingerprint: true
+            junit allowEmptyResults: true, testResults: 'artifacts/junit*.xml'
+            publishHTML([allowMissing: true, alwaysLinkToLastBuild: true, includes: '**/*.*', keepAll: false, reportDir: 'htmlcov', reportFiles: 'index.html', reportName: 'Coverage Report', reportTitles: ''])
+            deleteDir()
+        }
+    }
+}
+
+def getCommandOutput(cmd) {
+    stdout = bat(returnStdout: true, script: cmd).trim()
+    result = stdout.readLines().drop(1).join(" ")
+    return result
+}
+
+def gitDescribe() {
+    try { return getCommandOutput('git describe --first-parent') }
+    catch (ex) {}
+    return '0.0.0.0-0'
+}
+
+def setBuildVersion() {
+    if (env.BRANCH_NAME.startsWith("master")) {
+        if (shouldMakeInternalRelease()) {
+            makeInternalRelease(releaseVersion())
+        }
+    } else if (env.BRANCH_NAME.startsWith("release")) {
+        def oldDescribe = gitDescribe()
+        def tagName = oldDescribe.split("-")[0]
+        def tokens = tagName.tokenize('.')
+        def major = tokens[0]
+        def minor = tokens[1]
+        def maint = tokens[2]
+        def patch = tokens[3]
+        if (shouldMakePatchRelease()) {
+            def newPatch = (patch.toInteger() + 1).toString()
+            def version = major + '.' + minor + '.' + maint + '.' + newPatch
+            makePatchRelease(version)
+        } else if (shouldMakeMaintenanceRelease()) {
+            def newMaint = (maint.toInteger() + 1).toString()
+            version = major + '.' + minor + '.' + newMaint + '.0'
+            makePatchRelease(version)
+        }
+    }
+    currentBuild.displayName = gitDescribe()
+}
+
+def shouldDeploy() {
+    try { return params.deploy }
+    catch (ex) {}
+    return false
+}
+
+def shouldUploadtoArtifactory() {
+    try { return params.artifactoryUpload }
+    catch (ex) {}
+    return false
+}
+
+def getBranchName() {
+    return "${env.BRANCH_NAME}".replaceAll("[^A-Za-z0-9]", "-")
+}
+
+def shouldMakeInternalRelease() {
+    if (binding.releaseMade == 'true') {
+        return false
+    }
+    try { return params.internalRelease }
+    catch (ex) {}
+    return false
+}
+
+def shouldMakePatchRelease() {
+    if (binding.releaseMade == 'true') {
+        return false
+    }
+    try { return params.patchRelease }
+    catch (ex) {}
+    return false
+}
+
+def shouldMakeMaintenanceRelease() {
+    if (binding.releaseMade == 'true') {
+        return false
+    }
+    try { return params.maintenanceRelease }
+    catch (ex) {}
+    return false
+}
+
+def releaseVersion() {
+    try { return params.version }
+    catch (ex) {}
+    return "0.0.0.0"
+}
+
+def shouldRunCoverity() {
+    try { return params.runCoverity }
+    catch (ex) {}
+    return false
+}
+
+def shouldRunBlackDuckScan() {
+    if (params.runBlackDuckScan == null) {
+        return false
+    } else if (params.runBlackDuckScan == false) {
+        return false
+    } else {
+        return true
+    }
+}
+
+def releaseBlackDuckVersion() {
+    try { return params.blackduckversion }
+    catch (ex) {}
+    return ""
+}
+
+def makeInternalRelease(version) {
+    def branch = 'release/' + version
+    withCredentials([usernamePassword(credentialsId: "${params.Credential}", passwordVariable: 'GIT_PASSWORD', usernameVariable: 'GIT_USERNAME')]) {
+        bat "git checkout -b ${branch}"
+        bat "git commit --allow-empty -m \"Starting work on internal release ${version}\""
+        bat "git tag -a -m \"Internal release: ${version}\" ${version}"
+        bat "git push -u https://${GIT_USERNAME}:${GIT_PASSWORD}@bitbucket.honeywell.com/scm/CNC/netsense.core.pushreceiver.git ${branch}"
+        bat "git push https://${GIT_USERNAME}:${GIT_PASSWORD}@bitbucket.honeywell.com/scm/CNC/netsense.core.pushreceiver.git ${version}"
+    }
+    binding.releaseMade = 'true'
+}
+
+def makePatchRelease(version) {
+    withCredentials([usernamePassword(credentialsId: "${params.Credential}", passwordVariable: 'GIT_PASSWORD', usernameVariable: 'GIT_USERNAME')]) {
+        bat "git tag -a -m \"Release: ${version}\" ${version}"
+        bat "git push -u https://${GIT_USERNAME}:${GIT_PASSWORD}@bitbucket.honeywell.com/scm/CNC/netsense.core.pushreceiver.git ${version}"
+    }
+    binding.releaseMade = 'true'
+}
