@@ -4,9 +4,22 @@ pipeline {
     }
 
     stages {
-        stage('Example') {
+        stage('Checkout') {
             steps {
-                echo 'Hello, Jenkins!'
+                echo 'Checking out source code...'
+                checkout scm
+            }
+        }
+
+        stage('Build') {
+            steps {
+                echo 'Building the project...'
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                echo 'Deploying the project...'
             }
         }
     }
