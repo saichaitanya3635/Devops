@@ -1,6 +1,6 @@
 pipeline {
     agent {
-        label 'test-netsense'
+        label 'netsense-slave'
     }
 
     stages {
