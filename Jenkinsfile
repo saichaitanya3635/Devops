@@ -6,6 +6,11 @@ pipeline {
                 cleanWs()
             }
         }
+        stage('Checkout Code') {
+            steps {
+                checkout scm
+            }
+        }
         stage('Build') {
             steps {
                 echo "Workspace Directory: ${env.WORKSPACE}"
