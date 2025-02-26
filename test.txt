@@ -1,0 +1,2 @@
+mvn archetype:generate -DgroupId=com.example -DartifactId=simple-microservice \
+    -DarchetypeArtifactId=maven-archetype-quickstart -DinteractiveMode=false
