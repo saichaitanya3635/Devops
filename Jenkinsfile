@@ -4,6 +4,9 @@ pipeline {
         stage('Build') {
             steps {
                 echo 'Building...'
+                script {
+                    echo "Workspace Directory: ${env.WORKSPACE}"
+                }
             }
         }
     }
