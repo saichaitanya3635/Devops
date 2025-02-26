@@ -1,26 +1,10 @@
 pipeline {
-    agent {
-        label 'test-agent'
-    }
-
+    agent any
     stages {
-        stage('Checkout') {
+        stage('Check Git Path') {
             steps {
-                echo 'Checking out source code...'
-                cleanWs()
-                checkout scm
-            }
-        }
-
-        stage('Build') {
-            steps {
-                echo 'Building the project...'
-            }
-        }
-
-        stage('Deploy') {
-            steps {
-                echo 'Deploying the project...'
+                bat 'where git'  // Should return C:\Program Files\Git\cmd\git.exe
+                bat 'git --version'
             }
         }
     }
