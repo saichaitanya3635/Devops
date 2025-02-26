@@ -1,10 +1,9 @@
 pipeline {
-    agent 'test-agent'
+    agent { label 'test-agent' }  // ✅ Correct syntax
     stages {
-        stage('Check Git Path') {
+        stage('Build') {
             steps {
-                bat 'where git'  // Should return C:\Program Files\Git\cmd\git.exe
-                bat 'git --version'
+                echo 'Building...'
             }
         }
     }
