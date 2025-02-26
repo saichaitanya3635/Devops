@@ -1,12 +1,14 @@
 pipeline {
-    agent { label 'test-agent' }  // ✅ Correct syntax
+    agent { label 'test-agent' }
     stages {
+        stage('Clean Workspace') {
+            steps {
+                cleanWs()
+            }
+        }
         stage('Build') {
             steps {
-                echo 'Building...'
-                script {
-                    echo "Workspace Directory: ${env.WORKSPACE}"
-                }
+                echo "Workspace Directory: ${env.WORKSPACE}"
             }
         }
     }
